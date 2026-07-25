@@ -19,7 +19,7 @@ impl RustBackend {
         let files = vec![
             artifact("blueprint.json", blueprint_json),
             artifact("src/lib.rs", render_lib()),
-            artifact("src/descriptors.rs", render_descriptors()),
+            artifact("src/descriptors.rs", render_descriptors(blueprint)?),
             artifact("src/structs.rs", render_structs(blueprint)?),
             artifact("src/enums.rs", render_enums(blueprint)?),
             artifact("src/validators.rs", render_validators(blueprint)?),
@@ -51,21 +51,60 @@ pub mod validators;
     .to_string()
 }
 
-fn render_descriptors() -> String {
-    r#"/// 生成类型和值的稳定代码身份。
-pub trait Encode {
-    fn encode(&self) -> &'static str;
-}
+fn render_descriptors(blueprint: &Blueprint) -> Result<String> {
+    let mut field_descriptors = Vec::new();
+    for definition in &blueprint.structs {
+        for field in &definition.fields {
+            let descriptor_ident = type_ident(&format!(
+                "{}_{}_field",
+                definition.descriptor.code, field.descriptor.code
+            ))?;
+            let code = &field.descriptor.code;
+            let label = &field.descriptor.native_name;
+            let unit = field
+                .unit
+                .as_deref()
+                .map(|unit| quote! { Some(#unit) })
+                .unwrap_or_else(|| quote! { None });
+            field_descriptors.push(quote! {
+                pub struct #descriptor_ident;
 
-/// 字段、结构和函数共享的只读语义描述。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Descriptor {
-    pub code: &'static str,
-    pub label: &'static str,
-    pub unit: Option<&'static str>,
-}
-"#
-    .to_string()
+                impl #descriptor_ident {
+                    pub const DESCRIPTOR: Descriptor = Descriptor {
+                        code: #code,
+                        label: #label,
+                        unit: #unit,
+                    };
+
+                    pub const fn encode() -> &'static str {
+                        #code
+                    }
+                }
+
+                impl Encode for #descriptor_ident {
+                    fn encode(&self) -> &'static str {
+                        Self::encode()
+                    }
+                }
+            });
+        }
+    }
+    format_tokens(quote! {
+        /// 生成类型和值的稳定代码身份。
+        pub trait Encode {
+            fn encode(&self) -> &'static str;
+        }
+
+        /// 字段、结构和函数共享的只读语义描述。
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub struct Descriptor {
+            pub code: &'static str,
+            pub label: &'static str,
+            pub unit: Option<&'static str>,
+        }
+
+        #(#field_descriptors)*
+    })
 }
 
 fn render_structs(blueprint: &Blueprint) -> Result<String> {
@@ -92,6 +131,12 @@ fn render_structs(blueprint: &Blueprint) -> Result<String> {
             impl #struct_ident {
                 pub const fn encode() -> &'static str {
                     #type_code
+                }
+            }
+
+            impl crate::descriptors::Encode for #struct_ident {
+                fn encode(&self) -> &'static str {
+                    Self::encode()
                 }
             }
         });
@@ -309,6 +354,12 @@ fn render_functions(blueprint: &Blueprint) -> Result<String> {
                 }
             }
 
+            impl crate::descriptors::Encode for #descriptor_ident {
+                fn encode(&self) -> &'static str {
+                    Self::encode()
+                }
+            }
+
             pub fn #function_ident(
                 source: &std::collections::BTreeMap<String, serde_json::Value>,
             ) -> anyhow::Result<crate::structs::#output_ident> {
@@ -348,6 +399,27 @@ fn render_generated_tests(blueprint: &Blueprint) -> Result<String> {
         .first()
         .map(|binding| binding.source.code.as_str())
         .unwrap_or("missing");
+    let descriptor_assertion = definition
+        .fields
+        .first()
+        .map(|field| {
+            let descriptor_name = format!(
+                "{}_{}_field",
+                definition.descriptor.code, field.descriptor.code
+            );
+            let descriptor_ident = type_ident(&descriptor_name);
+            let field_code = &field.descriptor.code;
+            descriptor_ident.map(|descriptor_ident| {
+                quote! {
+                    assert_eq!(
+                        #crate_name::descriptors::#descriptor_ident::encode(),
+                        #field_code,
+                    );
+                }
+            })
+        })
+        .transpose()?
+        .unwrap_or_default();
     let range_test = render_range_rejection_test(blueprint, &crate_name, &decoder_ident)?;
     format_tokens(quote! {
         use std::collections::BTreeMap;
@@ -358,6 +430,7 @@ fn render_generated_tests(blueprint: &Blueprint) -> Result<String> {
             #(#valid_inserts)*
             let decoded = #crate_name::bindings::#decoder_ident(&source)?;
             #(#assertions)*
+            #descriptor_assertion
             Ok(())
         }
 
