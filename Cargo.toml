@@ -1,0 +1,38 @@
+[package]
+name = "nature-compiler"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+authors = ["zjarlin"]
+description = "A deterministic compiler from mother-tongue requirements to controlled Rust artifacts"
+homepage = "https://github.com/zjarlin/nature-compiler"
+repository = "https://github.com/zjarlin/nature-compiler"
+readme = "README.md"
+publish = false
+
+[dependencies]
+anyhow = "1.0.99"
+async-trait = "0.1.89"
+convert_case = "0.8.0"
+deunicode = "1.6.2"
+prettyplease = "0.2.37"
+proc-macro2 = "1.0.103"
+quote = "1.0.41"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+syn = { version = "2.0.108", features = ["full", "parsing"] }
+
+[dev-dependencies]
+tempfile = "3.23.0"
+tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
