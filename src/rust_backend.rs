@@ -204,6 +204,7 @@ fn render_bindings(blueprint: &Blueprint) -> Result<String> {
     }
 
     let helpers = quote! {
+        #[allow(dead_code)]
         fn read_decimal(
             source: &std::collections::BTreeMap<String, serde_json::Value>,
             key: &str,
@@ -222,6 +223,7 @@ fn render_bindings(blueprint: &Blueprint) -> Result<String> {
             anyhow::bail!("原始字段 {key} 不是小数")
         }
 
+        #[allow(dead_code)]
         fn read_integer(
             source: &std::collections::BTreeMap<String, serde_json::Value>,
             key: &str,
@@ -232,6 +234,7 @@ fn render_bindings(blueprint: &Blueprint) -> Result<String> {
                 .ok_or_else(|| anyhow::anyhow!("原始字段 {key} 不是整数"))
         }
 
+        #[allow(dead_code)]
         fn read_boolean(
             source: &std::collections::BTreeMap<String, serde_json::Value>,
             key: &str,
@@ -242,6 +245,7 @@ fn render_bindings(blueprint: &Blueprint) -> Result<String> {
                 .ok_or_else(|| anyhow::anyhow!("原始字段 {key} 不是布尔值"))
         }
 
+        #[allow(dead_code)]
         fn read_string(
             source: &std::collections::BTreeMap<String, serde_json::Value>,
             key: &str,
