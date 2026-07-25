@@ -2,8 +2,9 @@ use std::{fs, process::Command, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use nature_compiler::{
-    AppliedDefault, Blueprint, CapabilityCatalog, CapabilityProvider, CompileRequest, Compiler,
-    Diagnostic, FixtureMapProvider, MotherTongueInferenceEngine, SemanticDescriptor,
+    AppliedDefault, Blueprint, CapabilityCatalog, CapabilityProvider, CompileRequest, CompileStage,
+    Compiler, Diagnostic, FixtureMapProvider, InferenceMode, MotherTongueInferenceEngine,
+    SemanticDescriptor,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -39,6 +40,22 @@ async fn compiles_mother_tongue_environment_model() -> Result<()> {
     );
     assert_eq!(blueprint.bindings[0].source.code, "temp_x10");
     assert_eq!(blueprint.bindings[1].source.code, "humidity_x10");
+    assert_eq!(
+        result
+            .trace
+            .stages
+            .iter()
+            .map(|observation| observation.stage)
+            .collect::<Vec<_>>(),
+        [
+            CompileStage::SourceContract,
+            CompileStage::Inference,
+            CompileStage::CapabilityResolution,
+            CompileStage::BlueprintPolicy,
+            CompileStage::RustGeneration,
+        ]
+    );
+    assert_eq!(result.trace.inference.mode, InferenceMode::Deterministic);
     let Some(artifacts) = result.artifacts.as_ref() else {
         bail!("环境采集应生成 Rust artifact");
     };

@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ArtifactSet, Blueprint, BreakingChange, CapabilityCatalog, Diagnostic, DiagnosticLevel, Encode,
+    ArtifactSet, Blueprint, BreakingChange, CapabilityCatalog, CompileStage,
+    CompileStageObservation, CompileStageStatus, CompileTrace, Diagnostic, DiagnosticLevel, Encode,
     ImpactArea, InferenceEngine, RustBackend, policy,
 };
 
@@ -24,6 +25,7 @@ pub struct CompileResult {
     pub diagnostics: Vec<Diagnostic>,
     pub breaking_changes: Vec<BreakingChange>,
     pub artifacts: Option<ArtifactSet>,
+    pub trace: CompileTrace,
 }
 
 /// 编排推导、能力解析、策略校验和确定性 Rust 后端。
@@ -44,23 +46,36 @@ impl Compiler {
 
     /// 执行无文件系统副作用的完整编译。
     pub async fn compile(&self, request: CompileRequest) -> Result<CompileResult> {
+        let mut trace = CompileTrace::default();
+        let stage_started = Instant::now();
         let mut diagnostics = policy::validate_source_contract(&request.source_text);
+        trace_stage(
+            &mut trace,
+            CompileStage::SourceContract,
+            stage_started,
+            !has_errors(&diagnostics),
+        );
         if has_errors(&diagnostics) {
             return Ok(CompileResult {
                 blueprint: None,
                 diagnostics,
                 breaking_changes: Vec::new(),
                 artifacts: None,
+                trace,
             });
         }
 
+        let stage_started = Instant::now();
         let inference = self
             .inference
             .infer(&request.source_text, request.previous_blueprint.as_ref())
             .await?;
+        trace_stage(&mut trace, CompileStage::Inference, stage_started, true);
+        trace.inference = inference.metrics;
         let mut blueprint = inference.blueprint;
         diagnostics.extend(inference.diagnostics);
 
+        let stage_started = Instant::now();
         for requirement in blueprint.capabilities.clone() {
             match self.capabilities.resolve(
                 &requirement.descriptor.native_name,
@@ -73,29 +88,65 @@ impl Compiler {
                 Err(diagnostic) => diagnostics.push(diagnostic),
             }
         }
+        trace_stage(
+            &mut trace,
+            CompileStage::CapabilityResolution,
+            stage_started,
+            !has_errors(&diagnostics),
+        );
+
+        let stage_started = Instant::now();
         diagnostics.extend(policy::validate_blueprint(&blueprint));
         let breaking_changes = request
             .previous_blueprint
             .as_ref()
             .map(|previous| detect_breaking_changes(previous, &blueprint))
             .unwrap_or_default();
+        trace_stage(
+            &mut trace,
+            CompileStage::BlueprintPolicy,
+            stage_started,
+            !has_errors(&diagnostics),
+        );
         if has_errors(&diagnostics) {
             return Ok(CompileResult {
                 blueprint: Some(blueprint),
                 diagnostics,
                 breaking_changes,
                 artifacts: None,
+                trace,
             });
         }
 
+        let stage_started = Instant::now();
         let artifacts = self.backend.generate(&blueprint)?;
+        trace_stage(
+            &mut trace,
+            CompileStage::RustGeneration,
+            stage_started,
+            true,
+        );
         Ok(CompileResult {
             blueprint: Some(blueprint),
             diagnostics,
             breaking_changes,
             artifacts: Some(artifacts),
+            trace,
         })
     }
+}
+
+fn trace_stage(trace: &mut CompileTrace, stage: CompileStage, started: Instant, succeeded: bool) {
+    let elapsed = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    trace.stages.push(CompileStageObservation {
+        stage,
+        status: if succeeded {
+            CompileStageStatus::Succeeded
+        } else {
+            CompileStageStatus::Failed
+        },
+        duration_ms: elapsed,
+    });
 }
 
 fn has_errors(diagnostics: &[Diagnostic]) -> bool {

@@ -7,8 +7,8 @@ use deunicode::deunicode;
 use crate::{
     AppliedDefault, Blueprint, CapabilityRequirement, DescriptorEncoder, Diagnostic,
     DomainMetadata, Encode, FieldBinding, FieldDefinition, FieldType, FunctionDefinition,
-    InferenceDecision, LogicStep, Requirement, SemanticDescriptor, StructDefinition,
-    ValidationRule, ValueTransform, normalize_inferred_stem,
+    InferenceDecision, InferenceMetrics, LogicStep, Requirement, SemanticDescriptor,
+    StructDefinition, ValidationRule, ValueTransform, normalize_inferred_stem,
 };
 
 /// 推导阶段的强类型结果。
@@ -16,6 +16,7 @@ use crate::{
 pub struct InferenceResult {
     pub blueprint: Blueprint,
     pub diagnostics: Vec<Diagnostic>,
+    pub metrics: InferenceMetrics,
 }
 
 /// AI 或确定性规则引擎必须实现的受控推导边界。
@@ -207,6 +208,7 @@ fn infer_chinese_blueprint(
     Ok(InferenceResult {
         blueprint,
         diagnostics,
+        metrics: InferenceMetrics::deterministic("mother_tongue"),
     })
 }
 
