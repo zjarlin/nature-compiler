@@ -16,7 +16,7 @@ pub use artifact::{ArtifactFile, ArtifactSet};
 pub use blueprint::*;
 pub use capability::{CapabilityCatalog, CapabilityProvider, FixtureMapProvider};
 pub use compiler::{CompileRequest, CompileResult, Compiler};
-pub use descriptor::SemanticDescriptor;
+pub use descriptor::{DescriptorEncoder, SemanticDescriptor, normalize_inferred_stem};
 pub use diagnostic::{BreakingChange, Diagnostic, DiagnosticLevel, ImpactArea};
 pub use encode::Encode;
 pub use inference::{InferenceEngine, InferenceResult, MotherTongueInferenceEngine};

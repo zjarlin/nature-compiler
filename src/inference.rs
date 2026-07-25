@@ -2,14 +2,13 @@ use std::collections::BTreeMap;
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
-use convert_case::{Case, Casing};
 use deunicode::deunicode;
-use sha2::{Digest, Sha256};
 
 use crate::{
-    AppliedDefault, Blueprint, CapabilityRequirement, Diagnostic, DomainMetadata, Encode,
-    FieldBinding, FieldDefinition, FieldType, FunctionDefinition, InferenceDecision, LogicStep,
-    Requirement, SemanticDescriptor, StructDefinition, ValidationRule, ValueTransform,
+    AppliedDefault, Blueprint, CapabilityRequirement, DescriptorEncoder, Diagnostic,
+    DomainMetadata, Encode, FieldBinding, FieldDefinition, FieldType, FunctionDefinition,
+    InferenceDecision, LogicStep, Requirement, SemanticDescriptor, StructDefinition,
+    ValidationRule, ValueTransform, normalize_inferred_stem,
 };
 
 /// 推导阶段的强类型结果。
@@ -372,7 +371,7 @@ fn strip_list_marker(line: &str) -> &str {
 
 struct DescriptorFactory<'a> {
     previous: BTreeMap<String, SemanticDescriptor>,
-    claimed_codes: BTreeMap<String, String>,
+    encoder: DescriptorEncoder,
     decisions: Vec<InferenceDecision>,
     _previous_blueprint: Option<&'a Blueprint>,
 }
@@ -385,7 +384,7 @@ impl<'a> DescriptorFactory<'a> {
         }
         Self {
             previous,
-            claimed_codes: BTreeMap::new(),
+            encoder: DescriptorEncoder::default(),
             decisions: Vec::new(),
             _previous_blueprint: previous_blueprint,
         }
@@ -393,8 +392,7 @@ impl<'a> DescriptorFactory<'a> {
 
     fn describe(&mut self, native_name: &str, preferred_stem: Option<&str>) -> SemanticDescriptor {
         if let Some(previous) = self.previous.get(native_name).cloned() {
-            self.claimed_codes
-                .insert(previous.code.clone(), native_name.to_string());
+            self.encoder.reserve(&previous);
             self.decisions.push(InferenceDecision {
                 subject: native_name.to_string(),
                 decision: format!("复用英文语义 {}", previous.english_stem),
@@ -406,21 +404,14 @@ impl<'a> DescriptorFactory<'a> {
         let english_stem = preferred_stem
             .map(str::to_string)
             .unwrap_or_else(|| translate_semantic_name(native_name));
-        let base_code = normalize_code(&english_stem);
-        let code = match self.claimed_codes.get(&base_code) {
-            Some(claimed_by) if claimed_by != native_name => {
-                format!("{base_code}_{}", short_hash(native_name))
-            }
-            _ => base_code,
-        };
-        self.claimed_codes
-            .insert(code.clone(), native_name.to_string());
+        let descriptor = self.encoder.describe(native_name, &english_stem);
+        let code = descriptor.code.clone();
         self.decisions.push(InferenceDecision {
             subject: native_name.to_string(),
             decision: format!("推导英文语义 {english_stem}，编码为 {code}"),
             reused: false,
         });
-        SemanticDescriptor::new(native_name, english_stem, code)
+        descriptor
     }
 }
 
@@ -475,45 +466,7 @@ fn translate_semantic_name(native_name: &str) -> String {
     if let Some(value) = exact.get(native_name) {
         return (*value).to_string();
     }
-    normalize_code(&deunicode(native_name))
-}
-
-fn normalize_code(value: &str) -> String {
-    let already_snake = value.chars().all(|character| {
-        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
-    });
-    let normalized = if already_snake {
-        value.to_string()
-    } else {
-        value.to_case(Case::Snake)
-    };
-    let filtered = normalized
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    let segments = filtered
-        .split('_')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    let candidate = segments.join("_");
-    if candidate.is_empty() {
-        format!("semantic_{}", short_hash(value))
-    } else if candidate.starts_with(|character: char| character.is_ascii_digit()) {
-        format!("semantic_{candidate}")
-    } else {
-        candidate
-    }
-}
-
-fn short_hash(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    format!("{:x}", digest)[..8].to_string()
+    normalize_inferred_stem(&deunicode(native_name), native_name)
 }
 
 #[cfg(test)]
