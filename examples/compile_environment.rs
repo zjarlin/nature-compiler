@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use nature_compiler::{CapabilityCatalog, CompileRequest, Compiler, MotherTongueInferenceEngine};
+use nature_compiler::{CompileRequest, Compiler, CompilerCatalog, MotherTongueInferenceEngine};
 
 const SOURCE: &str = include_str!("../tests/fixtures/environment.txt");
 
@@ -9,7 +9,7 @@ const SOURCE: &str = include_str!("../tests/fixtures/environment.txt");
 async fn main() -> Result<()> {
     let compiler = Compiler::new(
         Arc::new(MotherTongueInferenceEngine),
-        CapabilityCatalog::with_fixture_map(),
+        CompilerCatalog::with_fixture_map(),
     );
     let result = compiler
         .compile(CompileRequest {

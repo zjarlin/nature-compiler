@@ -64,6 +64,28 @@ pub fn validate_blueprint(blueprint: &Blueprint) -> Vec<Diagnostic> {
             &mut diagnostics,
         );
     }
+    claim_code(
+        blueprint.application.domain.encode(),
+        &blueprint.application.domain.descriptor.native_name,
+        &mut claimed,
+        &mut diagnostics,
+    );
+    for operation in &blueprint.application.operations {
+        claim_code(
+            operation.encode(),
+            &operation.descriptor.native_name,
+            &mut claimed,
+            &mut diagnostics,
+        );
+    }
+    for view in &blueprint.application.views {
+        claim_code(
+            view.encode(),
+            &view.descriptor.native_name,
+            &mut claimed,
+            &mut diagnostics,
+        );
+    }
 
     for binding in &blueprint.bindings {
         let owner_exists = blueprint
@@ -84,7 +106,82 @@ pub fn validate_blueprint(blueprint: &Blueprint) -> Vec<Diagnostic> {
             ));
         }
     }
+    validate_application_references(blueprint, &mut diagnostics);
     diagnostics
+}
+
+fn validate_application_references(blueprint: &Blueprint, diagnostics: &mut Vec<Diagnostic>) {
+    let application = &blueprint.application;
+    let mut routes = BTreeMap::<String, String>::new();
+    for interface in &application.interfaces {
+        if !application
+            .operations
+            .iter()
+            .any(|operation| operation.descriptor == interface.operation)
+        {
+            diagnostics.push(Diagnostic::error(
+                &interface.descriptor.native_name,
+                "接口引用了不存在的领域操作。",
+            ));
+        }
+        let route_key = format!("{:?} {}", interface.method, interface.path);
+        if let Some(previous) =
+            routes.insert(route_key.clone(), interface.descriptor.native_name.clone())
+        {
+            diagnostics.push(Diagnostic::error(
+                &interface.descriptor.native_name,
+                format!("领域路由 {route_key} 与“{previous}”冲突。"),
+            ));
+        }
+    }
+    if !application
+        .views
+        .iter()
+        .any(|view| view.descriptor == application.navigation.default_view)
+    {
+        diagnostics.push(Diagnostic::error(
+            &application.navigation.descriptor.native_name,
+            "默认导航引用了不存在的页面。",
+        ));
+    }
+    for entry in &application.navigation.entries {
+        if !application
+            .views
+            .iter()
+            .any(|view| view.descriptor == entry.view)
+        {
+            diagnostics.push(Diagnostic::error(
+                &entry.descriptor.native_name,
+                "导航入口引用了不存在的页面。",
+            ));
+        }
+        for permission in &entry.permissions {
+            if !application
+                .permissions
+                .iter()
+                .any(|item| item.descriptor == *permission)
+            {
+                diagnostics.push(Diagnostic::error(
+                    &entry.descriptor.native_name,
+                    "导航入口引用了不存在的权限。",
+                ));
+            }
+        }
+    }
+    for permission in &application.permissions {
+        for operation in &permission.operations {
+            if !application
+                .operations
+                .iter()
+                .any(|item| item.descriptor == *operation)
+            {
+                diagnostics.push(Diagnostic::error(
+                    &permission.descriptor.native_name,
+                    "权限引用了不存在的领域操作。",
+                ));
+            }
+        }
+    }
 }
 
 fn claim_code(

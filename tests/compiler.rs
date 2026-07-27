@@ -3,8 +3,8 @@ use std::{fs, process::Command, sync::Arc};
 use anyhow::{Context, Result, bail};
 use nature_compiler::{
     AppliedDefault, Blueprint, CapabilityCatalog, CapabilityProvider, CompileRequest, CompileStage,
-    Compiler, Diagnostic, FixtureMapProvider, InferenceMode, MotherTongueInferenceEngine,
-    SemanticDescriptor,
+    Compiler, CompilerCatalog, Diagnostic, FixtureMapProvider, InferenceMode,
+    MotherTongueInferenceEngine, SemanticDescriptor, ViewLayout,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -15,7 +15,7 @@ const ENVIRONMENT_ARTIFACT_HASH: &str = include_str!("fixtures/environment.sha25
 fn compiler() -> Compiler {
     Compiler::new(
         Arc::new(MotherTongueInferenceEngine),
-        CapabilityCatalog::with_fixture_map(),
+        CompilerCatalog::with_fixture_map(),
     )
 }
 
@@ -28,7 +28,7 @@ async fn compiles_mother_tongue_environment_model() -> Result<()> {
         })
         .await?;
 
-    assert!(result.artifacts.is_some());
+    assert!(result.artifacts.is_some(), "诊断: {:?}", result.diagnostics);
     let blueprint = require_blueprint(result.blueprint.as_ref())?;
     assert_eq!(
         blueprint.structs[0].descriptor.code,
@@ -138,7 +138,10 @@ async fn capability_ambiguity_fails_before_generation() -> Result<()> {
         Arc::new(FixtureMapProvider),
         Arc::new(SecondFixtureProvider),
     ]);
-    let compiler = Compiler::new(Arc::new(MotherTongueInferenceEngine), catalog);
+    let compiler = Compiler::new(
+        Arc::new(MotherTongueInferenceEngine),
+        CompilerCatalog::new(catalog, Vec::new(), Vec::new()),
+    );
     let result = compiler
         .compile(CompileRequest {
             source_text: ENVIRONMENT_SOURCE.to_string(),
@@ -152,6 +155,63 @@ async fn capability_ambiguity_fails_before_generation() -> Result<()> {
             .diagnostics
             .iter()
             .any(|item| item.message.contains("多个"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn compiles_full_stack_user_domain_without_machine_protocol() -> Result<()> {
+    let source = r#"领域：用户管理
+
+需求：
+1. 用户可以注册和登录
+2. 管理员可以查询、修改和停用用户
+
+建模：用户
+1. 用户名：文本，必填，唯一
+2. 密码：密码，必填
+3. 邮箱：文本，邮箱格式
+4. 权限等级：字典，显示母语标签
+
+操作：
+1. 注册用户时校验用户名和邮箱，然后保存用户
+2. 登录时校验密码并返回登录结果
+
+界面：用户列表
+1. 使用表格展示用户名、邮箱和权限等级
+
+界面：用户资料
+1. 使用表单管理用户信息
+
+导航：
+1. 在“组织管理”下面显示“用户管理”
+2. 用户列表作为默认页面
+
+权限：
+1. 用户只能管理自己的资料
+2. 管理员可以管理全部用户"#;
+    let result = compiler()
+        .compile(CompileRequest {
+            source_text: source.to_string(),
+            previous_blueprint: None,
+        })
+        .await?;
+    let blueprint = require_blueprint(result.blueprint.as_ref())?;
+
+    assert!(result.artifacts.is_some(), "诊断: {:?}", result.diagnostics);
+    assert_eq!(
+        blueprint.application.domain.descriptor.native_name,
+        "用户管理"
+    );
+    assert_eq!(blueprint.application.views.len(), 2);
+    assert_eq!(blueprint.application.views[0].layout, ViewLayout::Table);
+    assert_eq!(blueprint.application.navigation.section_label, "组织管理");
+    assert!(
+        blueprint
+            .application
+            .interfaces
+            .iter()
+            .all(|interface| interface.path.starts_with("/api/app/"))
     );
     Ok(())
 }

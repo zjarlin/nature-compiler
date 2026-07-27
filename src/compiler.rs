@@ -4,8 +4,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ArtifactSet, Blueprint, BreakingChange, CapabilityCatalog, CompileStage,
-    CompileStageObservation, CompileStageStatus, CompileTrace, Diagnostic, DiagnosticLevel, Encode,
+    ArtifactSet, Blueprint, BreakingChange, CompileStage, CompileStageObservation,
+    CompileStageStatus, CompileTrace, CompilerCatalog, Diagnostic, DiagnosticLevel, Encode,
     ImpactArea, InferenceEngine, RustBackend, policy,
 };
 
@@ -31,15 +31,15 @@ pub struct CompileResult {
 /// 编排推导、能力解析、策略校验和确定性 Rust 后端。
 pub struct Compiler {
     inference: Arc<dyn InferenceEngine>,
-    capabilities: CapabilityCatalog,
+    catalog: CompilerCatalog,
     backend: RustBackend,
 }
 
 impl Compiler {
-    pub fn new(inference: Arc<dyn InferenceEngine>, capabilities: CapabilityCatalog) -> Self {
+    pub fn new(inference: Arc<dyn InferenceEngine>, catalog: CompilerCatalog) -> Self {
         Self {
             inference,
-            capabilities,
+            catalog,
             backend: RustBackend,
         }
     }
@@ -68,7 +68,11 @@ impl Compiler {
         let stage_started = Instant::now();
         let inference = self
             .inference
-            .infer(&request.source_text, request.previous_blueprint.as_ref())
+            .infer(
+                &request.source_text,
+                request.previous_blueprint.as_ref(),
+                &self.catalog,
+            )
             .await?;
         trace_stage(&mut trace, CompileStage::Inference, stage_started, true);
         trace.inference = inference.metrics;
@@ -77,7 +81,7 @@ impl Compiler {
 
         let stage_started = Instant::now();
         for requirement in blueprint.capabilities.clone() {
-            match self.capabilities.resolve(
+            match self.catalog.capabilities.resolve(
                 &requirement.descriptor.native_name,
                 &requirement.source_phrase,
             ) {

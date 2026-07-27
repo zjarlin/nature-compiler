@@ -16,8 +16,11 @@ impl RustBackend {
     pub fn generate(&self, blueprint: &Blueprint) -> Result<ArtifactSet> {
         let blueprint_json =
             serde_json::to_string_pretty(blueprint).context("序列化 Blueprint 快照失败")?;
+        let application_json = serde_json::to_string_pretty(&blueprint.application)
+            .context("序列化应用定义快照失败")?;
         let files = vec![
             artifact("blueprint.json", blueprint_json),
+            artifact("application.json", application_json),
             artifact("src/lib.rs", render_lib()),
             artifact("src/descriptors.rs", render_descriptors(blueprint)?),
             artifact("src/structs.rs", render_structs(blueprint)?),
@@ -189,7 +192,15 @@ fn render_validators(blueprint: &Blueprint) -> Result<String> {
         for field in &definition.fields {
             let field_ident = value_ident(&field.descriptor.code)?;
             let field_label = &field.descriptor.native_name;
-            if field.required && field.field_type == FieldType::String {
+            if field.required
+                && matches!(
+                    field.field_type,
+                    FieldType::String
+                        | FieldType::Password
+                        | FieldType::Email
+                        | FieldType::Dictionary
+                )
+            {
                 rules.push(quote! {
                     if value.#field_ident.trim().is_empty() {
                         anyhow::bail!(concat!(#field_label, "不能为空"));
@@ -208,6 +219,13 @@ fn render_validators(blueprint: &Blueprint) -> Result<String> {
                         }
                     });
                 }
+                if matches!(validation, ValidationRule::Email) {
+                    rules.push(quote! {
+                        if !value.#field_ident.contains('@') {
+                            anyhow::bail!(concat!(#field_label, "不是有效邮箱"));
+                        }
+                    });
+                }
             }
         }
         validators.push(quote! {
@@ -223,6 +241,14 @@ fn render_validators(blueprint: &Blueprint) -> Result<String> {
 fn render_bindings(blueprint: &Blueprint) -> Result<String> {
     let mut decoders = Vec::new();
     for definition in &blueprint.structs {
+        let definition_bindings = blueprint
+            .bindings
+            .iter()
+            .filter(|binding| binding.owner == definition.descriptor)
+            .collect::<Vec<_>>();
+        if definition_bindings.is_empty() {
+            continue;
+        }
         let type_ident = type_ident(&definition.descriptor.code)?;
         let decoder_ident = value_ident(&format!("decode_{}", definition.descriptor.code))?;
         let validator_ident = value_ident(&format!("validate_{}", definition.descriptor.code))?;
@@ -314,7 +340,9 @@ fn render_assignment(field: &FieldDefinition, binding: &FieldBinding) -> Result<
             quote! { read_integer(source, #source_code)? }
         }
         FieldType::Boolean => quote! { read_boolean(source, #source_code)? },
-        FieldType::String => quote! { read_string(source, #source_code)? },
+        FieldType::String | FieldType::Password | FieldType::Email | FieldType::Dictionary => {
+            quote! { read_string(source, #source_code)? }
+        }
         FieldType::Json => quote! {
             source
                 .get(#source_code)
@@ -376,6 +404,9 @@ fn render_generated_tests(blueprint: &Blueprint) -> Result<String> {
     };
     let decoder_ident = value_ident(&format!("decode_{}", definition.descriptor.code))?;
     let crate_name = quote! { az_aio_nature_generated };
+    if blueprint.bindings.is_empty() {
+        return render_model_tests(definition, &crate_name);
+    }
     let mut valid_inserts = Vec::new();
     let mut assertions = Vec::new();
     for field in &definition.fields {
@@ -456,6 +487,48 @@ fn render_generated_tests(blueprint: &Blueprint) -> Result<String> {
     })
 }
 
+fn render_model_tests(
+    definition: &crate::StructDefinition,
+    crate_name: &TokenStream,
+) -> Result<String> {
+    let type_ident = type_ident(&definition.descriptor.code)?;
+    let model_code = &definition.descriptor.code;
+    let validator_ident = value_ident(&format!("validate_{}", definition.descriptor.code))?;
+    let assignments = definition
+        .fields
+        .iter()
+        .map(|field| {
+            let field_ident = value_ident(&field.descriptor.code)?;
+            let value = model_test_value(field);
+            Ok(quote! { #field_ident: #value })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    format_tokens(quote! {
+        #[test]
+        fn model_value_passes_generated_validation() -> anyhow::Result<()> {
+            let value = #crate_name::structs::#type_ident {
+                #(#assignments,)*
+            };
+            #crate_name::validators::#validator_ident(&value)?;
+            assert_eq!(#crate_name::structs::#type_ident::encode(), #model_code);
+            Ok(())
+        }
+    })
+}
+
+fn model_test_value(field: &FieldDefinition) -> TokenStream {
+    match field.field_type {
+        FieldType::Decimal => quote! { 1.0_f64 },
+        FieldType::Integer | FieldType::Timestamp => quote! { 1_i64 },
+        FieldType::Boolean => quote! { true },
+        FieldType::String | FieldType::Password | FieldType::Dictionary => {
+            quote! { "测试值".to_string() }
+        }
+        FieldType::Email => quote! { "test@example.com".to_string() },
+        FieldType::Json => quote! { serde_json::json!({"value": 1}) },
+    }
+}
+
 fn fixture_test_raw(field: &FieldDefinition, binding: &FieldBinding) -> TokenStream {
     match field.field_type {
         FieldType::Decimal => {
@@ -468,7 +541,9 @@ fn fixture_test_raw(field: &FieldDefinition, binding: &FieldBinding) -> TokenStr
         }
         FieldType::Integer | FieldType::Timestamp => quote! { 1_i64 },
         FieldType::Boolean => quote! { true },
-        FieldType::String => quote! { "测试值" },
+        FieldType::String | FieldType::Password | FieldType::Email | FieldType::Dictionary => {
+            quote! { "test@example.com" }
+        }
         FieldType::Json => quote! { serde_json::json!({"value": 1}) },
     }
 }
@@ -491,7 +566,9 @@ fn fixture_test_assertion(field: &FieldDefinition, field_ident: &Ident) -> Token
             quote! { assert_eq!(decoded.#field_ident, 1_i64); }
         }
         FieldType::Boolean => quote! { assert!(decoded.#field_ident); },
-        FieldType::String => quote! { assert_eq!(decoded.#field_ident, "测试值"); },
+        FieldType::String | FieldType::Password | FieldType::Email | FieldType::Dictionary => {
+            quote! { assert_eq!(decoded.#field_ident, "test@example.com"); }
+        }
         FieldType::Json => quote! { assert_eq!(decoded.#field_ident["value"], 1); },
     }
 }
