@@ -47,6 +47,7 @@ pub struct InferenceMetrics {
     pub output_tokens: u64,
     pub total_tokens: u64,
     pub cached_input_tokens: u64,
+    pub reused_semantics: u64,
 }
 
 impl InferenceMetrics {
@@ -59,6 +60,7 @@ impl InferenceMetrics {
             output_tokens: 0,
             total_tokens: 0,
             cached_input_tokens: 0,
+            reused_semantics: 0,
         }
     }
 }

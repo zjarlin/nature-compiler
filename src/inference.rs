@@ -296,6 +296,7 @@ fn infer_chinese_blueprint(
         &mut factory,
     );
 
+    let reused_semantics = factory.reused_semantics;
     let inference_decisions = factory.decisions;
     let blueprint = Blueprint {
         source_text: source_text.to_string(),
@@ -312,10 +313,12 @@ fn infer_chinese_blueprint(
         inference_decisions,
         defaults,
     };
+    let mut metrics = InferenceMetrics::deterministic("mother_tongue");
+    metrics.reused_semantics = reused_semantics;
     Ok(InferenceResult {
         blueprint,
         diagnostics,
-        metrics: InferenceMetrics::deterministic("mother_tongue"),
+        metrics,
     })
 }
 
@@ -890,21 +893,33 @@ fn strip_list_marker(line: &str) -> &str {
 
 struct DescriptorFactory<'a> {
     previous: BTreeMap<String, SemanticDescriptor>,
+    previous_decisions: BTreeMap<String, InferenceDecision>,
     encoder: DescriptorEncoder,
     decisions: Vec<InferenceDecision>,
+    reused_semantics: u64,
     _previous_blueprint: Option<&'a Blueprint>,
 }
 
 impl<'a> DescriptorFactory<'a> {
     fn new(previous_blueprint: Option<&'a Blueprint>) -> Self {
         let mut previous = BTreeMap::new();
+        let mut previous_decisions = BTreeMap::new();
         if let Some(blueprint) = previous_blueprint {
             collect_descriptors(blueprint, &mut previous);
+            previous_decisions.extend(
+                blueprint
+                    .inference_decisions
+                    .iter()
+                    .cloned()
+                    .map(|decision| (decision.subject.clone(), decision)),
+            );
         }
         Self {
             previous,
+            previous_decisions,
             encoder: DescriptorEncoder::default(),
             decisions: Vec::new(),
+            reused_semantics: 0,
             _previous_blueprint: previous_blueprint,
         }
     }
@@ -912,11 +927,20 @@ impl<'a> DescriptorFactory<'a> {
     fn describe(&mut self, native_name: &str, preferred_stem: Option<&str>) -> SemanticDescriptor {
         if let Some(previous) = self.previous.get(native_name).cloned() {
             self.encoder.reserve(&previous);
-            self.decisions.push(InferenceDecision {
-                subject: native_name.to_string(),
-                decision: format!("复用英文语义 {}", previous.english_stem),
-                reused: true,
-            });
+            self.reused_semantics += 1;
+            let decision = self
+                .previous_decisions
+                .get(native_name)
+                .cloned()
+                .unwrap_or_else(|| InferenceDecision {
+                    subject: native_name.to_string(),
+                    decision: format!(
+                        "推导英文语义 {}，编码为 {}",
+                        previous.english_stem, previous.code
+                    ),
+                    reused: false,
+                });
+            self.decisions.push(decision);
             return previous;
         }
 

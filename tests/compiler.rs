@@ -81,7 +81,9 @@ async fn stable_semantics_reuse_previous_inference() -> Result<()> {
     let current = require_blueprint(second.blueprint.as_ref())?;
 
     assert_eq!(previous.structs, current.structs);
-    assert!(current.inference_decisions.iter().any(|item| item.reused));
+    assert_eq!(previous.inference_decisions, current.inference_decisions);
+    assert!(second.trace.inference.reused_semantics > 0);
+    assert_eq!(first.artifacts, second.artifacts);
     Ok(())
 }
 
